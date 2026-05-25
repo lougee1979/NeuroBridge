@@ -7,7 +7,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * A custom input method service that provides NeuroBridge rewrite controls.
+ * A custom input method service that provides NeuroBridge Clarity rewrite controls.
  */
 class NeuroBridgeKeyboardService : InputMethodService() {
 
@@ -18,12 +18,12 @@ class NeuroBridgeKeyboardService : InputMethodService() {
         }
 
         val title = TextView(this).apply {
-            text = "NeuroBridge Rewrite Keyboard"
+            text = "NeuroBridge Clarity Keyboard"
             textSize = 18f
         }
 
         val helperText = TextView(this).apply {
-            text = "Tap a rewrite style to insert a prompt into the current app."
+            text = "Tap a rewrite style to insert a clarity prompt into the current app."
             textSize = 13f
         }
 
