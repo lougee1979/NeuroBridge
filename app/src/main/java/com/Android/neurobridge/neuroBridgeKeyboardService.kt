@@ -10,10 +10,13 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * A basic QWERTY input method with iOS-style keys and a compact NeuroBridge Clarity action row.
+ * QWERTY input method with iOS-style keys, rewrite controls, a rewrite box, and a teaching box.
  */
 class NeuroBridgeKeyboardService : InputMethodService() {
     private var isShifted = false
+    private var latestOriginal = ""
+    private var latestRewrite = ""
+    private var latestTeaching = "Select text or type a message, then tap Rewrite."
     private lateinit var root: LinearLayout
 
     override fun onCreateInputView(): View {
@@ -30,6 +33,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     private fun buildKeyboard() {
         root.removeAllViews()
         addClarityToolbar()
+        addRewritePanel()
         addLetterRow("qwertyuiop", sideInsetWeight = 0f)
         addLetterRow("asdfghjkl", sideInsetWeight = 0.45f)
         addBottomLetterRow()
@@ -38,23 +42,121 @@ class NeuroBridgeKeyboardService : InputMethodService() {
 
     private fun addClarityToolbar() {
         val row = horizontalRow(heightDp = 36)
-        row.addView(toolbarKey("Rewrite", weight = 1.2f) {
-            commitText("[Rewrite this for clearer neurodivergent-friendly communication]")
-        })
-        row.addView(toolbarKey("Shorter") {
-            commitText("[Rewrite this shorter while keeping the same meaning]")
-        })
-        row.addView(toolbarKey("Warmer") {
-            commitText("[Rewrite this warmer and less abrupt while keeping the same meaning]")
-        })
-        row.addView(toolbarKey("Direct") {
-            commitText("[Rewrite this more direct and specific while staying respectful]")
-        })
+        row.addView(toolbarKey("Rewrite", weight = 1.2f) { runRewrite(RewriteMode.CLEAR) })
+        row.addView(toolbarKey("Shorter") { runRewrite(RewriteMode.SHORTER) })
+        row.addView(toolbarKey("Warmer") { runRewrite(RewriteMode.WARMER) })
+        row.addView(toolbarKey("Direct") { runRewrite(RewriteMode.DIRECT) })
         root.addView(row)
     }
 
+    private fun addRewritePanel() {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBackground(Color.rgb(232, 226, 236), 12f)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(dp(2), dp(3), dp(2), dp(5)) }
+        }
+
+        panel.addView(TextView(this).apply {
+            text = "Rewrite box"
+            setTextColor(Color.rgb(28, 28, 30))
+            setTextSize(13f)
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        panel.addView(TextView(this).apply {
+            text = latestRewrite.ifBlank { "Tap Rewrite to generate a clearer version." }
+            setTextColor(Color.rgb(28, 28, 30))
+            setTextSize(14f)
+            maxLines = 2
+        })
+
+        panel.addView(TextView(this).apply {
+            text = "Teaching box"
+            setTextColor(Color.rgb(28, 28, 30))
+            setTextSize(13f)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(4), 0, 0)
+        })
+        panel.addView(TextView(this).apply {
+            text = latestTeaching
+            setTextColor(Color.rgb(60, 60, 67))
+            setTextSize(13f)
+            maxLines = 2
+        })
+
+        val useRow = horizontalRow(heightDp = 34)
+        useRow.addView(toolbarKey("Use Rewrite", weight = 1.4f) { useLatestRewrite() })
+        useRow.addView(toolbarKey("Clear", weight = 0.8f) {
+            latestOriginal = ""
+            latestRewrite = ""
+            latestTeaching = "Select text or type a message, then tap Rewrite."
+            buildKeyboard()
+        })
+        panel.addView(useRow)
+
+        root.addView(panel)
+    }
+
+    private fun runRewrite(mode: RewriteMode) {
+        val selected = currentInputConnection?.getSelectedText(0)?.toString().orEmpty().trim()
+        val beforeCursor = currentInputConnection?.getTextBeforeCursor(500, 0)?.toString().orEmpty().trim()
+        val source = selected.ifBlank { beforeCursor }.trim()
+
+        if (source.isBlank()) {
+            latestOriginal = ""
+            latestRewrite = ""
+            latestTeaching = "No text found. Type a message first, or select text in the app, then tap Rewrite."
+            buildKeyboard()
+            return
+        }
+
+        latestOriginal = source
+        latestRewrite = createRewrite(source, mode)
+        latestTeaching = createTeaching(source, mode)
+        buildKeyboard()
+    }
+
+    private fun useLatestRewrite() {
+        if (latestRewrite.isBlank()) {
+            latestTeaching = "Tap Rewrite first, then Use Rewrite."
+            buildKeyboard()
+            return
+        }
+
+        val selected = currentInputConnection?.getSelectedText(0)?.toString().orEmpty()
+        if (selected.isNotBlank()) {
+            currentInputConnection?.commitText(latestRewrite, 1)
+        } else if (latestOriginal.isNotBlank()) {
+            currentInputConnection?.deleteSurroundingText(latestOriginal.length, 0)
+            currentInputConnection?.commitText(latestRewrite, 1)
+        } else {
+            currentInputConnection?.commitText(latestRewrite, 1)
+        }
+    }
+
+    private fun createRewrite(text: String, mode: RewriteMode): String {
+        return when (mode) {
+            RewriteMode.CLEAR -> "I want to say this clearly: $text"
+            RewriteMode.SHORTER -> text.split(Regex("\\s+")).take(18).joinToString(" ").let { "Clear version: $it" }
+            RewriteMode.WARMER -> "I want to say this warmly and clearly: $text"
+            RewriteMode.DIRECT -> "Direct version: $text"
+        }
+    }
+
+    private fun createTeaching(text: String, mode: RewriteMode): String {
+        return when (mode) {
+            RewriteMode.CLEAR -> "Adds explicit intent so the reader does not have to infer the emotional meaning."
+            RewriteMode.SHORTER -> "Reduces cognitive load by cutting the message down to the main point."
+            RewriteMode.WARMER -> "Softens tone while keeping the original meaning intact."
+            RewriteMode.DIRECT -> "Makes the request easier to act on by reducing ambiguity."
+        }
+    }
+
     private fun addLetterRow(letters: String, sideInsetWeight: Float) {
-        val row = horizontalRow(heightDp = 48)
+        val row = horizontalRow(heightDp = 44)
         if (sideInsetWeight > 0f) row.addView(spacer(sideInsetWeight))
         letters.forEach { letter ->
             row.addView(letterKey(displayLetter(letter.toString())) {
@@ -70,7 +172,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     }
 
     private fun addBottomLetterRow() {
-        val row = horizontalRow(heightDp = 48)
+        val row = horizontalRow(heightDp = 44)
         row.addView(utilityKey("⇧", weight = 1.35f) {
             isShifted = !isShifted
             buildKeyboard()
@@ -93,7 +195,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     }
 
     private fun addUtilityRow() {
-        val row = horizontalRow(heightDp = 48)
+        val row = horizontalRow(heightDp = 44)
         row.addView(utilityKey("123", weight = 1.25f) { commitText("123") })
         row.addView(utilityKey(",", weight = 0.8f) { commitText(",") })
         row.addView(letterKey("space", weight = 4.4f) { commitText(" ") })
@@ -124,11 +226,11 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     }
 
     private fun letterKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
-        return keyView(label, weight, Color.WHITE, Color.rgb(28, 28, 30), if (label == "space") 15f else 22f, 9f, onClick)
+        return keyView(label, weight, Color.WHITE, Color.rgb(28, 28, 30), if (label == "space") 15f else 20f, 9f, onClick)
     }
 
     private fun utilityKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
-        return keyView(label, weight, Color.rgb(172, 179, 188), Color.rgb(28, 28, 30), 15f, 9f, onClick)
+        return keyView(label, weight, Color.rgb(172, 179, 188), Color.rgb(28, 28, 30), 14f, 9f, onClick)
     }
 
     private fun toolbarKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
@@ -174,5 +276,12 @@ class NeuroBridgeKeyboardService : InputMethodService() {
 
     private fun commitText(text: String) {
         currentInputConnection?.commitText(text, 1)
+    }
+
+    private enum class RewriteMode {
+        CLEAR,
+        SHORTER,
+        WARMER,
+        DIRECT
     }
 }
