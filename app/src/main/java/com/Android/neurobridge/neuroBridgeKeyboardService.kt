@@ -19,7 +19,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     override fun onCreateInputView(): View {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(6, 6, 6, 8)
+            setPadding(dp(6), dp(6), dp(6), dp(8))
             setBackgroundColor(Color.rgb(207, 211, 217))
         }
 
@@ -37,7 +37,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     }
 
     private fun addClarityToolbar() {
-        val row = horizontalRow(height = 38)
+        val row = horizontalRow(heightDp = 36)
         row.addView(toolbarKey("Rewrite", weight = 1.2f) {
             commitText("[Rewrite this for clearer neurodivergent-friendly communication]")
         })
@@ -54,7 +54,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     }
 
     private fun addLetterRow(letters: String, sideInsetWeight: Float) {
-        val row = horizontalRow(height = 46)
+        val row = horizontalRow(heightDp = 48)
         if (sideInsetWeight > 0f) row.addView(spacer(sideInsetWeight))
         letters.forEach { letter ->
             row.addView(letterKey(displayLetter(letter.toString())) {
@@ -70,7 +70,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     }
 
     private fun addBottomLetterRow() {
-        val row = horizontalRow(height = 46)
+        val row = horizontalRow(heightDp = 48)
         row.addView(utilityKey("⇧", weight = 1.35f) {
             isShifted = !isShifted
             buildKeyboard()
@@ -93,7 +93,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     }
 
     private fun addUtilityRow() {
-        val row = horizontalRow(height = 46)
+        val row = horizontalRow(heightDp = 48)
         row.addView(utilityKey("123", weight = 1.25f) { commitText("123") })
         row.addView(utilityKey(",", weight = 0.8f) { commitText(",") })
         row.addView(letterKey("space", weight = 4.4f) { commitText(" ") })
@@ -106,13 +106,13 @@ class NeuroBridgeKeyboardService : InputMethodService() {
         return if (isShifted) letter.uppercase() else letter.lowercase()
     }
 
-    private fun horizontalRow(height: Int): LinearLayout {
+    private fun horizontalRow(heightDp: Int): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                height
+                dp(heightDp)
             )
         }
     }
@@ -155,7 +155,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
             isFocusable = true
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
-                setMargins(3, 3, 3, 3)
+                setMargins(dp(2), dp(3), dp(2), dp(3))
             }
         }
     }
@@ -166,6 +166,10 @@ class NeuroBridgeKeyboardService : InputMethodService() {
             setColor(color)
             cornerRadius = radiusDp * resources.displayMetrics.density
         }
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
     }
 
     private fun commitText(text: String) {
