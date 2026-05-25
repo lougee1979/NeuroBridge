@@ -1,15 +1,16 @@
 package com.Android.neurobridge
 
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
 import android.view.Gravity
 import android.view.View
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * A basic QWERTY input method with a compact NeuroBridge Clarity action row.
+ * A basic QWERTY input method with iOS-style keys and a compact NeuroBridge Clarity action row.
  */
 class NeuroBridgeKeyboardService : InputMethodService() {
     private var isShifted = false
@@ -18,8 +19,8 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     override fun onCreateInputView(): View {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(8, 8, 8, 8)
-            setBackgroundColor(Color.rgb(238, 238, 238))
+            setPadding(6, 6, 6, 8)
+            setBackgroundColor(Color.rgb(207, 211, 217))
         }
 
         buildKeyboard()
@@ -28,43 +29,35 @@ class NeuroBridgeKeyboardService : InputMethodService() {
 
     private fun buildKeyboard() {
         root.removeAllViews()
-
-        root.addView(TextView(this).apply {
-            text = "NeuroBridge Clarity"
-            textSize = 13f
-            setTextColor(Color.DKGRAY)
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 4)
-        })
-
-        addActionRow()
-        addLetterRow("qwertyuiop")
-        addLetterRow("asdfghjkl")
+        addClarityToolbar()
+        addLetterRow("qwertyuiop", sideInsetWeight = 0f)
+        addLetterRow("asdfghjkl", sideInsetWeight = 0.45f)
         addBottomLetterRow()
         addUtilityRow()
     }
 
-    private fun addActionRow() {
-        val row = horizontalRow()
-        row.addView(keyButton("Rewrite", weight = 1.2f) {
+    private fun addClarityToolbar() {
+        val row = horizontalRow(height = 38)
+        row.addView(toolbarKey("Rewrite", weight = 1.2f) {
             commitText("[Rewrite this for clearer neurodivergent-friendly communication]")
         })
-        row.addView(keyButton("Shorter", weight = 1f) {
+        row.addView(toolbarKey("Shorter") {
             commitText("[Rewrite this shorter while keeping the same meaning]")
         })
-        row.addView(keyButton("Warmer", weight = 1f) {
+        row.addView(toolbarKey("Warmer") {
             commitText("[Rewrite this warmer and less abrupt while keeping the same meaning]")
         })
-        row.addView(keyButton("Direct", weight = 1f) {
+        row.addView(toolbarKey("Direct") {
             commitText("[Rewrite this more direct and specific while staying respectful]")
         })
         root.addView(row)
     }
 
-    private fun addLetterRow(letters: String) {
-        val row = horizontalRow()
+    private fun addLetterRow(letters: String, sideInsetWeight: Float) {
+        val row = horizontalRow(height = 46)
+        if (sideInsetWeight > 0f) row.addView(spacer(sideInsetWeight))
         letters.forEach { letter ->
-            row.addView(keyButton(displayLetter(letter.toString())) {
+            row.addView(letterKey(displayLetter(letter.toString())) {
                 commitText(displayLetter(letter.toString()))
                 if (isShifted) {
                     isShifted = false
@@ -72,17 +65,19 @@ class NeuroBridgeKeyboardService : InputMethodService() {
                 }
             })
         }
+        if (sideInsetWeight > 0f) row.addView(spacer(sideInsetWeight))
         root.addView(row)
     }
 
     private fun addBottomLetterRow() {
-        val row = horizontalRow()
-        row.addView(keyButton(if (isShifted) "SHIFT" else "Shift", weight = 1.4f) {
+        val row = horizontalRow(height = 46)
+        row.addView(utilityKey("⇧", weight = 1.35f) {
             isShifted = !isShifted
             buildKeyboard()
         })
+        row.addView(spacer(0.15f))
         "zxcvbnm".forEach { letter ->
-            row.addView(keyButton(displayLetter(letter.toString())) {
+            row.addView(letterKey(displayLetter(letter.toString())) {
                 commitText(displayLetter(letter.toString()))
                 if (isShifted) {
                     isShifted = false
@@ -90,29 +85,20 @@ class NeuroBridgeKeyboardService : InputMethodService() {
                 }
             })
         }
-        row.addView(keyButton("⌫", weight = 1.4f) {
+        row.addView(spacer(0.15f))
+        row.addView(utilityKey("⌫", weight = 1.35f) {
             currentInputConnection?.deleteSurroundingText(1, 0)
         })
         root.addView(row)
     }
 
     private fun addUtilityRow() {
-        val row = horizontalRow()
-        row.addView(keyButton("123", weight = 1.1f) {
-            commitText("123")
-        })
-        row.addView(keyButton(",", weight = 0.8f) {
-            commitText(",")
-        })
-        row.addView(keyButton("Space", weight = 4f) {
-            commitText(" ")
-        })
-        row.addView(keyButton(".", weight = 0.8f) {
-            commitText(".")
-        })
-        row.addView(keyButton("Enter", weight = 1.3f) {
-            commitText("\n")
-        })
+        val row = horizontalRow(height = 46)
+        row.addView(utilityKey("123", weight = 1.25f) { commitText("123") })
+        row.addView(utilityKey(",", weight = 0.8f) { commitText(",") })
+        row.addView(letterKey("space", weight = 4.4f) { commitText(" ") })
+        row.addView(utilityKey(".", weight = 0.8f) { commitText(".") })
+        row.addView(utilityKey("return", weight = 1.45f) { commitText("\n") })
         root.addView(row)
     }
 
@@ -120,29 +106,65 @@ class NeuroBridgeKeyboardService : InputMethodService() {
         return if (isShifted) letter.uppercase() else letter.lowercase()
     }
 
-    private fun horizontalRow(): LinearLayout {
+    private fun horizontalRow(height: Int): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                height
+            )
         }
     }
 
-    private fun keyButton(label: String, weight: Float = 1f, onClick: () -> Unit): Button {
-        return Button(this).apply {
+    private fun spacer(weight: Float): View {
+        return View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight)
+        }
+    }
+
+    private fun letterKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
+        return keyView(label, weight, Color.WHITE, Color.rgb(28, 28, 30), if (label == "space") 15f else 22f, 9f, onClick)
+    }
+
+    private fun utilityKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
+        return keyView(label, weight, Color.rgb(172, 179, 188), Color.rgb(28, 28, 30), 15f, 9f, onClick)
+    }
+
+    private fun toolbarKey(label: String, weight: Float = 1f, onClick: () -> Unit): TextView {
+        return keyView(label, weight, Color.rgb(245, 245, 247), Color.rgb(54, 54, 57), 13f, 16f, onClick)
+    }
+
+    private fun keyView(
+        label: String,
+        weight: Float,
+        backgroundColor: Int,
+        textColor: Int,
+        textSize: Float,
+        radius: Float,
+        onClick: () -> Unit
+    ): TextView {
+        return TextView(this).apply {
             text = label
-            textSize = if (label.length > 6) 11f else 15f
-            isAllCaps = false
-            minHeight = 0
-            minimumHeight = 0
-            setPadding(2, 0, 2, 0)
-            layoutParams = LinearLayout.LayoutParams(
-                0,
-                48,
-                weight
-            ).apply {
+            gravity = Gravity.CENTER
+            setTextColor(textColor)
+            setTextSize(textSize)
+            typeface = Typeface.DEFAULT
+            background = roundedBackground(backgroundColor, radius)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
                 setMargins(3, 3, 3, 3)
             }
-            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun roundedBackground(color: Int, radiusDp: Float): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(color)
+            cornerRadius = radiusDp * resources.displayMetrics.density
         }
     }
 
