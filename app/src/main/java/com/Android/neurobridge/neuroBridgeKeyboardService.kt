@@ -21,6 +21,9 @@ class NeuroBridgeKeyboardService : InputMethodService() {
     private var latestOriginal = ""
     private var latestRewrite = ""
     private var latestTeaching = "Select text or type a message, then tap Rewrite."
+    private var keyboardTypedText = StringBuilder()
+    private var latestDeleteCount = 0
+    private var latestUsedSelection = false
     private lateinit var root: LinearLayout
 
     override fun onCreateInputView(): View {
@@ -96,6 +99,9 @@ class NeuroBridgeKeyboardService : InputMethodService() {
         useRow.addView(toolbarKey("Clear", weight = 0.8f) {
             latestOriginal = ""
             latestRewrite = ""
+            keyboardTypedText.clear()
+            latestDeleteCount = 0
+            latestUsedSelection = false
             latestTeaching = "Select text or type a message, then tap Rewrite."
             buildKeyboard()
         })
@@ -106,13 +112,21 @@ class NeuroBridgeKeyboardService : InputMethodService() {
 
     private fun runRewrite(mode: RewriteMode) {
         val selected = currentInputConnection?.getSelectedText(0)?.toString().orEmpty().trim()
-        val beforeCursor = currentInputConnection?.getTextBeforeCursor(500, 0)?.toString().orEmpty().trim()
-        val source = selected.ifBlank { beforeCursor }.trim()
+        val typedByKeyboard = keyboardTypedText.toString().trim()
+        val beforeCursor = currentInputConnection?.getTextBeforeCursor(2000, 0)?.toString().orEmpty().trim()
+
+        val source = when {
+            selected.isNotBlank() -> selected
+            typedByKeyboard.isNotBlank() -> typedByKeyboard
+            else -> beforeCursor
+        }.trim()
+        latestUsedSelection = selected.isNotBlank()
+        latestDeleteCount = if (latestUsedSelection) selected.length else source.length
 
         if (source.isBlank()) {
             latestOriginal = ""
             latestRewrite = ""
-            latestTeaching = "No text found. Type a message first, or select text in the app, then tap Rewrite."
+            latestTeaching = "No text found. Type a message first, paste text into the field, or select text, then tap Rewrite."
             buildKeyboard()
             return
         }
@@ -131,14 +145,19 @@ class NeuroBridgeKeyboardService : InputMethodService() {
         }
 
         val selected = currentInputConnection?.getSelectedText(0)?.toString().orEmpty()
-        if (selected.isNotBlank()) {
+        if (selected.isNotBlank() || latestUsedSelection) {
             currentInputConnection?.commitText(latestRewrite, 1)
-        } else if (latestOriginal.isNotBlank()) {
-            currentInputConnection?.deleteSurroundingText(latestOriginal.length, 0)
+        } else if (latestDeleteCount > 0) {
+            currentInputConnection?.deleteSurroundingText(latestDeleteCount, 0)
             currentInputConnection?.commitText(latestRewrite, 1)
         } else {
             currentInputConnection?.commitText(latestRewrite, 1)
         }
+        keyboardTypedText.clear()
+        keyboardTypedText.append(latestRewrite)
+        latestOriginal = latestRewrite
+        latestDeleteCount = latestRewrite.length
+        latestUsedSelection = false
     }
 
     private fun createRewrite(text: String, mode: RewriteMode): String {
@@ -194,6 +213,9 @@ class NeuroBridgeKeyboardService : InputMethodService() {
         row.addView(spacer(0.15f))
         row.addView(utilityKey("⌫", weight = 1.35f) {
             currentInputConnection?.deleteSurroundingText(1, 0)
+            if (keyboardTypedText.isNotEmpty()) {
+                keyboardTypedText.deleteCharAt(keyboardTypedText.length - 1)
+            }
         })
         root.addView(row)
     }
@@ -280,6 +302,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
 
     private fun commitText(text: String) {
         currentInputConnection?.commitText(text, 1)
+        keyboardTypedText.append(text)
     }
 
     private enum class RewriteMode {
