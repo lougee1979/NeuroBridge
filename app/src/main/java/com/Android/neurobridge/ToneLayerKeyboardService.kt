@@ -148,17 +148,33 @@ class ToneLayerKeyboardService : InputMethodService() {
         buildKeyboard()
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val apiKey = prefs.getString(PREF_CLAUDE_API_KEY, "").orEmpty()
+        val apiKey = prefs.getString(PREF_CLAUDE_API_KEY, "").orEmpty().trim()
         val consent = prefs.getBoolean(PREF_AI_CONSENT, false)
         if (!consent) {
-            latestRewrite = createRewrite(source, mode)
-            latestTeaching = "Turn on AI processing consent in the ToneLayer Clarity app to use live rewrites. " + longMessageCheck(source)
+            latestRewrite = createRewriteResult(source, ClarityLens.AUTO, mode.toRewriteStyle())
+            latestTeaching = appendLongMessageCheck(
+                fallbackTeaching(
+                    source,
+                    ClarityLens.AUTO,
+                    mode.toRewriteStyle(),
+                    "Turn on AI processing consent in the ToneLayer Clarity app to use live rewrites."
+                ),
+                source
+            )
             buildKeyboard()
             return
         }
         if (apiKey.isBlank()) {
-            latestRewrite = createRewrite(source, mode)
-            latestTeaching = "Add your Claude API key in the ToneLayer Clarity app to use live rewrites. " + longMessageCheck(source)
+            latestRewrite = createRewriteResult(source, ClarityLens.AUTO, mode.toRewriteStyle())
+            latestTeaching = appendLongMessageCheck(
+                fallbackTeaching(
+                    source,
+                    ClarityLens.AUTO,
+                    mode.toRewriteStyle(),
+                    "Add your Claude API key in the ToneLayer Clarity app to use live rewrites."
+                ),
+                source
+            )
             buildKeyboard()
             return
         }
@@ -168,10 +184,18 @@ class ToneLayerKeyboardService : InputMethodService() {
             Handler(Looper.getMainLooper()).post {
                 result.onSuccess {
                     latestRewrite = it.first
-                    latestTeaching = it.second + " " + longMessageCheck(source)
+                    latestTeaching = appendLongMessageCheck(it.second, source)
                 }.onFailure {
-                    latestRewrite = createRewrite(source, mode)
-                    latestTeaching = "Live rewrite failed, so this is a local fallback. ${it.localizedMessage ?: ""} " + longMessageCheck(source)
+                    latestRewrite = createRewriteResult(source, ClarityLens.AUTO, mode.toRewriteStyle())
+                    latestTeaching = appendLongMessageCheck(
+                        fallbackTeaching(
+                            source,
+                            ClarityLens.AUTO,
+                            mode.toRewriteStyle(),
+                            friendlyClaudeFailure(it)
+                        ),
+                        source
+                    )
                 }
                 buildKeyboard()
             }
@@ -202,21 +226,11 @@ class ToneLayerKeyboardService : InputMethodService() {
     }
 
     private fun createRewrite(text: String, mode: RewriteMode): String {
-        return when (mode) {
-            RewriteMode.CLEAR -> "Clear version: $text"
-            RewriteMode.SHORTER -> text.split(Regex("\\s+")).take(18).joinToString(" ").let { "Clear version: $it" }
-            RewriteMode.WARMER -> "I want to say this warmly and clearly: $text"
-            RewriteMode.DIRECT -> "Direct version: $text"
-        }
+        return createRewriteResult(text, ClarityLens.AUTO, mode.toRewriteStyle())
     }
 
     private fun createTeaching(text: String, mode: RewriteMode): String {
-        return when (mode) {
-            RewriteMode.CLEAR -> "Adds explicit intent so the reader does not have to infer the emotional meaning."
-            RewriteMode.SHORTER -> "Reduces cognitive load by cutting the message down to the main point."
-            RewriteMode.WARMER -> "Softens tone while keeping the original meaning intact."
-            RewriteMode.DIRECT -> "Makes the request easier to act on by reducing ambiguity."
-        }
+        return fallbackTeaching(text, ClarityLens.AUTO, mode.toRewriteStyle())
     }
 
     private fun longMessageCheck(text: String): String {
@@ -260,7 +274,7 @@ class ToneLayerKeyboardService : InputMethodService() {
         OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
         val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
         val response = stream.bufferedReader().use { it.readText() }
-        if (conn.responseCode !in 200..299) error("API failed ${conn.responseCode}: ${response.take(160)}")
+        if (conn.responseCode !in 200..299) throw ClaudeHttpException(conn.responseCode, response)
         val content = JSONObject(response).getJSONArray("content").getJSONObject(0).getString("text")
         val cleaned = extractJson(content)
         val parsed = JSONObject(cleaned)
@@ -404,10 +418,24 @@ class ToneLayerKeyboardService : InputMethodService() {
         keyboardTypedText.append(text)
     }
 
+    private fun appendLongMessageCheck(teaching: String, source: String): String {
+        val lengthNote = longMessageCheck(source)
+        return if (lengthNote.isBlank()) teaching else "$teaching $lengthNote"
+    }
+
     private enum class RewriteMode {
         CLEAR,
         SHORTER,
         WARMER,
         DIRECT
+    }
+
+    private fun RewriteMode.toRewriteStyle(): RewriteStyle {
+        return when (this) {
+            RewriteMode.CLEAR -> RewriteStyle.CLEAR
+            RewriteMode.SHORTER -> RewriteStyle.SHORTER
+            RewriteMode.WARMER -> RewriteStyle.WARMER
+            RewriteMode.DIRECT -> RewriteStyle.DIRECT
+        }
     }
 }

@@ -103,7 +103,7 @@ fun ToneLayerClarityApp() {
                 aiConsent = aiConsent,
                 onApiKeyChange = {
                     apiKey = it
-                    prefs.edit().putString(PREF_CLAUDE_API_KEY, it).apply()
+                    prefs.edit().putString(PREF_CLAUDE_API_KEY, it.trim()).apply()
                 },
                 onConsentChange = {
                     aiConsent = it
@@ -162,14 +162,24 @@ fun ToneLayerClarityApp() {
                             if (!aiConsent || apiKey.isBlank()) {
                                 AndroidRewriteResult(
                                     rewrite = createRewriteResult(input, selectedLens, style),
-                                    teaching = "Add your Claude API key and enable AI processing in Privacy + API to use live structured rewrites."
+                                    teaching = fallbackTeaching(
+                                        input,
+                                        selectedLens,
+                                        style,
+                                        "Add your Claude API key and enable AI processing in Privacy + API to use live structured rewrites."
+                                    )
                                 )
                             } else {
-                                runCatching { callClaudeForApp(apiKey, input, selectedLens, style) }
+                                runCatching { callClaudeForApp(apiKey.trim(), input, selectedLens, style) }
                                     .getOrElse {
                                         AndroidRewriteResult(
                                             rewrite = createRewriteResult(input, selectedLens, style),
-                                            teaching = "Live rewrite failed, so this is a local fallback. ${it.localizedMessage ?: ""}"
+                                            teaching = fallbackTeaching(
+                                                input,
+                                                selectedLens,
+                                                style,
+                                                friendlyClaudeFailure(it)
+                                            )
                                         )
                                     }
                             }
@@ -464,13 +474,43 @@ fun callClaudeForApp(
     OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
     val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
     val response = stream.bufferedReader().use { it.readText() }
-    if (conn.responseCode !in 200..299) error("API failed ${conn.responseCode}: ${response.take(180)}")
+    if (conn.responseCode !in 200..299) throw ClaudeHttpException(conn.responseCode, response)
     val content = JSONObject(response).getJSONArray("content").getJSONObject(0).getString("text")
     val parsed = JSONObject(extractJsonObject(content))
     return AndroidRewriteResult(
         rewrite = parsed.optString("rewrite", text),
         teaching = parsed.optString("teaching", "Fine-tuned for clarity.")
     )
+}
+
+class ClaudeHttpException(
+    val statusCode: Int,
+    private val responseBody: String
+) : Exception("Claude API request failed with HTTP $statusCode") {
+    fun bodyLowercase(): String = responseBody.lowercase()
+}
+
+fun friendlyClaudeFailure(error: Throwable): String {
+    val message = error.localizedMessage.orEmpty().lowercase()
+    val body = (error as? ClaudeHttpException)?.bodyLowercase().orEmpty()
+    return when {
+        error is ClaudeHttpException && error.statusCode == 401 ||
+            "authentication" in message ||
+            "authentication" in body ||
+            "x-api-key" in message ||
+            "x-api-key" in body -> {
+            "The saved Claude API key is invalid. Open Privacy + API, paste a valid Anthropic Claude key, then try again. Showing a local rewrite for now."
+        }
+        error is ClaudeHttpException && error.statusCode == 429 -> {
+            "Claude is rate-limiting requests right now. Showing a local rewrite for now."
+        }
+        error is ClaudeHttpException && error.statusCode in 500..599 -> {
+            "Claude is having a server issue right now. Showing a local rewrite for now."
+        }
+        else -> {
+            "Live rewrite is unavailable right now. Showing a local rewrite for now."
+        }
+    }
 }
 
 fun extractJsonObject(raw: String): String {
@@ -487,6 +527,17 @@ fun createRewriteResult(input: String, lens: ClarityLens, style: RewriteStyle): 
     val trimmed = input.trim()
     if (trimmed.isEmpty()) {
         return "Enter a message above, then tap Clarify."
+    }
+
+    val lower = trimmed.lowercase()
+    if (lower == "we need to talk" || lower == "we need to talk.") {
+        return when (style) {
+            RewriteStyle.CLEAR -> "Can we set aside a few minutes to talk about something specific? I do not want to leave this vague or stressful. I would like to explain what is on my mind and agree on next steps."
+            RewriteStyle.SHORTER -> "Can we set a time to talk about something specific? I want to be clear and avoid making this feel vague."
+            RewriteStyle.WARMER -> "Can we talk when you have a little time? I want to explain something clearly, and I do not want the message to sound alarming or vague."
+            RewriteStyle.DIRECT -> "Can we set a time to talk about [topic]? I want to discuss what happened and decide what to do next."
+            RewriteStyle.SOFTER -> "When you have the space, could we talk about something specific? Nothing needs to be solved this second; I just want to make sure we understand each other."
+        }
     }
 
     val clarityFrame = when (lens) {
@@ -533,6 +584,34 @@ $trimmed
 No pressure to respond immediately — I just wanted to make my intent clear.
 """.trimIndent()
     }
+}
+
+fun fallbackTeaching(
+    input: String,
+    lens: ClarityLens,
+    style: RewriteStyle,
+    setupOrFailureMessage: String? = null
+): String {
+    val specificNote = if (input.trim().lowercase().removeSuffix(".") == "we need to talk") {
+        "The original phrase can create anxiety because it does not say the topic, urgency, emotional intent, or requested action. The rewrite names that a conversation is needed, lowers the threat level, and asks for a concrete time."
+    } else {
+        val styleNote = when (style) {
+            RewriteStyle.CLEAR -> "The rewrite keeps the core message but makes the intent and next step easier to identify."
+            RewriteStyle.SHORTER -> "The rewrite reduces cognitive load by keeping the main point and removing extra friction."
+            RewriteStyle.WARMER -> "The rewrite adds connection and lowers the chance that direct wording lands as cold or tense."
+            RewriteStyle.DIRECT -> "The rewrite makes the requested action more obvious without adding harshness."
+            RewriteStyle.SOFTER -> "The rewrite lowers pressure while preserving the original meaning."
+        }
+        val lensNote = when (lens) {
+            ClarityLens.ADHD -> "It also puts the useful action closer to the front."
+            ClarityLens.AUTISM -> "It also makes implied meaning more explicit."
+            ClarityLens.PTSD -> "It also reduces threat signals and uncertainty."
+            ClarityLens.MIXED -> "It also reduces ambiguity, threat signals, and working-memory load."
+            ClarityLens.AUTO -> "It also clarifies intent, timing, tone, and requested action."
+        }
+        "$styleNote $lensNote"
+    }
+    return listOfNotNull(setupOrFailureMessage, specificNote).joinToString("\n\n")
 }
 
 fun createClarityResult(input: String, lens: ClarityLens): String {
