@@ -5,14 +5,26 @@
 package com.Android.neurobridge
 
 import android.os.Bundle
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
@@ -54,6 +66,7 @@ enum class RewriteStyle(val buttonLabel: String, val resultTitle: String) {
 @Composable
 fun ToneLayerClarityApp() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE) }
     var apiKey by remember { mutableStateOf(prefs.getString(PREF_CLAUDE_API_KEY, "") ?: "") }
     var aiConsent by remember { mutableStateOf(prefs.getBoolean(PREF_AI_CONSENT, false)) }
@@ -64,9 +77,10 @@ fun ToneLayerClarityApp() {
     }
     var selectedLens by remember { mutableStateOf(ClarityLens.AUTO) }
     var rewriteTitle by remember { mutableStateOf("Clearer rewrite") }
-    var rewriteText by remember { mutableStateOf(createRewriteResult(inputText, selectedLens, RewriteStyle.CLEAR)) }
-
-    val output = createClarityResult(inputText, selectedLens)
+    var rewriteText by remember { mutableStateOf("Your clearer version will appear here.") }
+    var teachingText by remember { mutableStateOf(createClarityResult(inputText, selectedLens)) }
+    var isRewriting by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
 
     MaterialTheme {
         Column(
@@ -105,8 +119,7 @@ fun ToneLayerClarityApp() {
                 selectedLens = selectedLens,
                 onLensSelected = {
                     selectedLens = it
-                    rewriteText = createRewriteResult(inputText, it, RewriteStyle.CLEAR)
-                    rewriteTitle = RewriteStyle.CLEAR.resultTitle
+                    teachingText = createClarityResult(inputText, it)
                 }
             )
 
@@ -116,8 +129,7 @@ fun ToneLayerClarityApp() {
                 value = inputText,
                 onValueChange = {
                     inputText = it
-                    rewriteText = createRewriteResult(it, selectedLens, RewriteStyle.CLEAR)
-                    rewriteTitle = RewriteStyle.CLEAR.resultTitle
+                    teachingText = createClarityResult(it, selectedLens)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -130,12 +142,51 @@ fun ToneLayerClarityApp() {
             Spacer(modifier = Modifier.height(16.dp))
 
             RewriteTools(
+                enabled = !isRewriting,
                 onRewriteSelected = { style ->
+                    val input = inputText.trim()
+                    if (input.isBlank()) {
+                        status = "Enter a message first"
+                        return@RewriteTools
+                    }
                     rewriteTitle = style.resultTitle
-                    rewriteText = createRewriteResult(inputText, selectedLens, style)
+                    isRewriting = true
+                    status = "Fine-tuning for clarity…"
+                    incrementMetric(prefs, "android.app.rewrite.requested")
+                    incrementMetric(prefs, "android.app.rewrite.style.${style.name}")
+                    if (input.length >= 700 || input.split(Regex("\\s+")).filter { it.isNotBlank() }.size >= 120) {
+                        incrementMetric(prefs, "android.app.longMessage.flagged")
+                    }
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            if (!aiConsent || apiKey.isBlank()) {
+                                AndroidRewriteResult(
+                                    rewrite = createRewriteResult(input, selectedLens, style),
+                                    teaching = "Add your Claude API key and enable AI processing in Privacy + API to use live structured rewrites."
+                                )
+                            } else {
+                                runCatching { callClaudeForApp(apiKey, input, selectedLens, style) }
+                                    .getOrElse {
+                                        AndroidRewriteResult(
+                                            rewrite = createRewriteResult(input, selectedLens, style),
+                                            teaching = "Live rewrite failed, so this is a local fallback. ${it.localizedMessage ?: ""}"
+                                        )
+                                    }
+                            }
+                        }
+                        rewriteText = result.rewrite
+                        teachingText = result.teaching
+                        isRewriting = false
+                        status = "Ready"
+                        incrementMetric(prefs, "android.app.rewrite.success")
+                    }
                 }
             )
 
+            Spacer(modifier = Modifier.height(8.dp))
+            if (status.isNotBlank()) {
+                Text(status, fontSize = 13.sp, color = Color.Gray)
+            }
             Spacer(modifier = Modifier.height(16.dp))
 
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -146,11 +197,36 @@ fun ToneLayerClarityApp() {
                         fontSize = 22.sp
                     )
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = rewriteText,
-                        fontSize = 17.sp,
-                        lineHeight = 26.sp
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = rewriteText,
+                            fontSize = 17.sp,
+                            lineHeight = 26.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = {
+                                copyToClipboard(context, rewriteText)
+                                incrementMetric(prefs, "android.app.rewrite.copied")
+                                incrementMetric(prefs, "android.app.rewrite.accepted")
+                                status = "Copied"
+                            },
+                            modifier = Modifier.weight(1f),
+                            enabled = rewriteText.isNotBlank() && !rewriteText.startsWith("Your clearer")
+                        ) { Text("Copy") }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                shareText(context, rewriteText)
+                                incrementMetric(prefs, "android.app.rewrite.shared")
+                                incrementMetric(prefs, "android.app.rewrite.accepted")
+                            },
+                            modifier = Modifier.weight(1f),
+                            enabled = rewriteText.isNotBlank() && !rewriteText.startsWith("Your clearer")
+                        ) { Text("Share") }
+                    }
                 }
             }
 
@@ -164,11 +240,13 @@ fun ToneLayerClarityApp() {
                         fontSize = 22.sp
                     )
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = output,
-                        fontSize = 17.sp,
-                        lineHeight = 26.sp
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = teachingText,
+                            fontSize = 17.sp,
+                            lineHeight = 26.sp
+                        )
+                    }
                 }
             }
 
@@ -239,7 +317,7 @@ fun MessageLengthFlag(inputText: String) {
 }
 
 @Composable
-fun RewriteTools(onRewriteSelected: (RewriteStyle) -> Unit) {
+fun RewriteTools(enabled: Boolean = true, onRewriteSelected: (RewriteStyle) -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -251,30 +329,35 @@ fun RewriteTools(onRewriteSelected: (RewriteStyle) -> Unit) {
             Row(modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = { onRewriteSelected(RewriteStyle.CLEAR) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    enabled = enabled
                 ) { Text(RewriteStyle.CLEAR.buttonLabel) }
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = { onRewriteSelected(RewriteStyle.SHORTER) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    enabled = enabled
                 ) { Text(RewriteStyle.SHORTER.buttonLabel) }
             }
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = { onRewriteSelected(RewriteStyle.WARMER) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    enabled = enabled
                 ) { Text(RewriteStyle.WARMER.buttonLabel) }
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = { onRewriteSelected(RewriteStyle.DIRECT) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    enabled = enabled
                 ) { Text(RewriteStyle.DIRECT.buttonLabel) }
             }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedButton(
                 onClick = { onRewriteSelected(RewriteStyle.SOFTER) },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = enabled
             ) { Text(RewriteStyle.SOFTER.buttonLabel) }
         }
     }
@@ -298,26 +381,157 @@ fun LensSelector(
     }
 }
 
+
+data class AndroidRewriteResult(
+    val rewrite: String,
+    val teaching: String
+)
+
+fun incrementMetric(prefs: android.content.SharedPreferences, key: String, amount: Int = 1) {
+    val fullKey = "metrics.$key"
+    prefs.edit()
+        .putInt(fullKey, prefs.getInt(fullKey, 0) + amount)
+        .putLong("metrics.lastUpdated", System.currentTimeMillis())
+        .apply()
+}
+
+fun copyToClipboard(context: android.content.Context, text: String) {
+    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("ToneLayer rewrite", text))
+}
+
+fun shareText(context: android.content.Context, text: String) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(intent, "Send rewrite"))
+}
+
+fun callClaudeForApp(
+    apiKey: String,
+    text: String,
+    lens: ClarityLens,
+    style: RewriteStyle
+): AndroidRewriteResult {
+    val lensInstruction = when (lens) {
+        ClarityLens.ADHD -> "ADHD: reduce working-memory load, surface the main point first, use clear next steps, remove side quests and buried asks."
+        ClarityLens.AUTISM -> "Autism: make implied meaning explicit, use concrete expectations, add social context without changing the user’s meaning."
+        ClarityLens.PTSD -> "PTSD/CPTSD: lower threat signals, preserve boundaries, reduce defensiveness, add calm reassurance where appropriate."
+        ClarityLens.MIXED -> "Mixed: clarify timing, intent, emotional framing, and requested action."
+        ClarityLens.AUTO -> "Auto: identify ambiguity, missing context, unclear urgency, tone mismatch, and unclear next steps."
+    }
+    val styleInstruction = when (style) {
+        RewriteStyle.CLEAR -> "Clarify: produce a polished, sendable rewrite with structure."
+        RewriteStyle.SHORTER -> "Make Brief: produce a concise rewrite that keeps only the essential point and next step."
+        RewriteStyle.WARMER -> "Soften Tone: produce a warmer rewrite that preserves meaning and reduces accidental harshness."
+        RewriteStyle.DIRECT -> "Be Direct: produce a direct rewrite with the ask and next step clearly stated, without sounding harsh."
+        RewriteStyle.SOFTER -> "Soften: produce a gentle, lower-pressure rewrite."
+    }
+    val system = """
+        You are ToneLayer Clarity, an AI communication assistant.
+        Rewrite the user's message into a sendable version.
+        Preserve meaning. Do not shame the user. Do not add fake facts.
+        Add structure: short paragraphs or bullets only when useful.
+        $lensInstruction
+        $styleInstruction
+        Return ONLY valid JSON with keys:
+        {
+          "rewrite": "sendable rewritten message",
+          "teaching": "brief explanation of what changed and why it improves clarity"
+        }
+    """.trimIndent()
+
+    val body = JSONObject().apply {
+        put("model", "claude-haiku-4-5-20251001")
+        put("max_tokens", 4096)
+        put("system", system)
+        put("messages", JSONArray().put(JSONObject().apply {
+            put("role", "user")
+            put("content", "Message:\n$text\n\nReply with ONLY valid JSON.")
+        }))
+    }
+
+    val conn = (URL("https://api.anthropic.com/v1/messages").openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"
+        connectTimeout = 30000
+        readTimeout = 90000
+        doOutput = true
+        setRequestProperty("x-api-key", apiKey)
+        setRequestProperty("anthropic-version", "2023-06-01")
+        setRequestProperty("Content-Type", "application/json")
+    }
+    OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
+    val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+    val response = stream.bufferedReader().use { it.readText() }
+    if (conn.responseCode !in 200..299) error("API failed ${conn.responseCode}: ${response.take(180)}")
+    val content = JSONObject(response).getJSONArray("content").getJSONObject(0).getString("text")
+    val parsed = JSONObject(extractJsonObject(content))
+    return AndroidRewriteResult(
+        rewrite = parsed.optString("rewrite", text),
+        teaching = parsed.optString("teaching", "Fine-tuned for clarity.")
+    )
+}
+
+fun extractJsonObject(raw: String): String {
+    var s = raw.trim()
+    if (s.startsWith("```")) {
+        s = s.substringAfter('\n').removeSuffix("```").trim()
+    }
+    val start = s.indexOf('{')
+    val end = s.lastIndexOf('}')
+    return if (start >= 0 && end > start) s.substring(start, end + 1) else s
+}
+
 fun createRewriteResult(input: String, lens: ClarityLens, style: RewriteStyle): String {
     val trimmed = input.trim()
     if (trimmed.isEmpty()) {
-        return "Enter a message above, then tap Rewrite."
+        return "Enter a message above, then tap Clarify."
     }
 
     val clarityFrame = when (lens) {
-        ClarityLens.ADHD -> "with clear next steps, lower cognitive load, and less ambiguity"
-        ClarityLens.AUTISM -> "with explicit context, concrete expectations, and reduced implied meaning"
-        ClarityLens.PTSD -> "with emotional safety, low threat, and clear reassurance"
-        ClarityLens.MIXED -> "with clear timing, intent, emotional framing, and action steps"
-        ClarityLens.AUTO -> "with clearer intent, timing, tone, and requested action"
+        ClarityLens.ADHD -> "clear next steps, lower cognitive load, and less ambiguity"
+        ClarityLens.AUTISM -> "explicit context, concrete expectations, and reduced implied meaning"
+        ClarityLens.PTSD -> "emotional safety, low threat, and clear reassurance"
+        ClarityLens.MIXED -> "clear timing, intent, emotional framing, and action steps"
+        ClarityLens.AUTO -> "clearer intent, timing, tone, and requested action"
     }
+    val brief = trimmed.split(Regex("\\s+")).take(28).joinToString(" ")
 
     return when (style) {
-        RewriteStyle.CLEAR -> "I want to revisit this in a clearer way. My goal is to communicate $clarityFrame. Here is the message I mean to send: $trimmed"
-        RewriteStyle.SHORTER -> "Clear version: $trimmed"
-        RewriteStyle.WARMER -> "I wanted to say this in a warmer way: $trimmed. My intent is connection and clarity, not pressure."
-        RewriteStyle.DIRECT -> "Direct version: $trimmed. Please let me know what works for you."
-        RewriteStyle.SOFTER -> "Softer version: $trimmed. No pressure to respond immediately — I just wanted to make my intent clear."
+        RewriteStyle.CLEAR -> """
+Clear version:
+
+$trimmed
+
+Intent: communicate with $clarityFrame.
+""".trimIndent()
+        RewriteStyle.SHORTER -> """
+Brief version:
+
+$brief
+""".trimIndent()
+        RewriteStyle.WARMER -> """
+Warmer version:
+
+$trimmed
+
+I want this to come across with connection and clarity, not pressure.
+""".trimIndent()
+        RewriteStyle.DIRECT -> """
+Direct version:
+
+$trimmed
+
+Please let me know what works for you.
+""".trimIndent()
+        RewriteStyle.SOFTER -> """
+Softer version:
+
+$trimmed
+
+No pressure to respond immediately — I just wanted to make my intent clear.
+""".trimIndent()
     }
 }
 
