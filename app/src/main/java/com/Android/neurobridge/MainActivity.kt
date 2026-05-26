@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -28,6 +29,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+private const val PREFS_NAME = "tonelayer_clarity_prefs"
+private const val PREF_CLAUDE_API_KEY = "claude_api_key"
+private const val PREF_AI_CONSENT = "ai_processing_consent"
+
 
 enum class ClarityLens {
     ADHD,
@@ -47,6 +53,10 @@ enum class RewriteStyle(val buttonLabel: String, val resultTitle: String) {
 
 @Composable
 fun NeuroBridgeApp() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE) }
+    var apiKey by remember { mutableStateOf(prefs.getString(PREF_CLAUDE_API_KEY, "") ?: "") }
+    var aiConsent by remember { mutableStateOf(prefs.getBoolean(PREF_AI_CONSENT, false)) }
     var inputText by remember {
         mutableStateOf(
             "Hey so I've been thinking about what you said the other night and I think we should probably talk at some point."
@@ -70,6 +80,21 @@ fun NeuroBridgeApp() {
                 text = "ToneLayer Clarity",
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            AndroidSetupCard(
+                apiKey = apiKey,
+                aiConsent = aiConsent,
+                onApiKeyChange = {
+                    apiKey = it
+                    prefs.edit().putString(PREF_CLAUDE_API_KEY, it).apply()
+                },
+                onConsentChange = {
+                    aiConsent = it
+                    prefs.edit().putBoolean(PREF_AI_CONSENT, it).apply()
+                }
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -97,8 +122,10 @@ fun NeuroBridgeApp() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(180.dp),
-                label = { Text("NT message") }
+                label = { Text("Message") }
             )
+
+            MessageLengthFlag(inputText)
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -146,6 +173,67 @@ fun NeuroBridgeApp() {
             }
 
             Spacer(modifier = Modifier.height(60.dp))
+        }
+    }
+}
+
+@Composable
+fun AndroidSetupCard(
+    apiKey: String,
+    aiConsent: Boolean,
+    onApiKeyChange: (String) -> Unit,
+    onConsentChange: (Boolean) -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Privacy + API", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "ToneLayer sends the message text you choose to clarify to the AI provider so it can rewrite it. Do not use private secrets, passwords, or medical record numbers in test messages.",
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = aiConsent, onCheckedChange = onConsentChange)
+                Text("I understand and consent to AI processing for rewrites.", fontSize = 13.sp)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = onApiKeyChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Claude API key") },
+                singleLine = true
+            )
+        }
+    }
+}
+
+@Composable
+fun MessageLengthFlag(inputText: String) {
+    val words = inputText.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size
+    val chars = inputText.length
+    val isLong = chars >= 700 || words >= 120
+    Text(
+        text = "$chars chars • $words words",
+        fontSize = 12.sp,
+        color = Color.Gray,
+        modifier = Modifier.padding(top = 6.dp)
+    )
+    if (isLong) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3D6))
+        ) {
+            Text(
+                text = "This is getting long for a text. Are you okay? If this is turning into a novel, try Clarify or Make Brief before sending.",
+                modifier = Modifier.padding(12.dp),
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            )
         }
     }
 }

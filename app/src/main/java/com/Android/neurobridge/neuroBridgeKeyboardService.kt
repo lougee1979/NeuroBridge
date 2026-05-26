@@ -8,14 +8,25 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * QWERTY input method with iOS-style keys, rewrite controls, a rewrite box, and a teaching box.
  */
+private const val PREFS_NAME = "tonelayer_clarity_prefs"
+private const val PREF_CLAUDE_API_KEY = "claude_api_key"
+private const val PREF_AI_CONSENT = "ai_processing_consent"
+
 class NeuroBridgeKeyboardService : InputMethodService() {
     private var isShifted = false
     private var latestOriginal = ""
@@ -132,9 +143,39 @@ class NeuroBridgeKeyboardService : InputMethodService() {
         }
 
         latestOriginal = source
-        latestRewrite = createRewrite(source, mode)
-        latestTeaching = createTeaching(source, mode)
+        latestRewrite = "Fine-tuning for clarity…"
+        latestTeaching = longMessageCheck(source)
         buildKeyboard()
+
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val apiKey = prefs.getString(PREF_CLAUDE_API_KEY, "").orEmpty()
+        val consent = prefs.getBoolean(PREF_AI_CONSENT, false)
+        if (!consent) {
+            latestRewrite = createRewrite(source, mode)
+            latestTeaching = "Turn on AI processing consent in the ToneLayer Clarity app to use live rewrites. " + longMessageCheck(source)
+            buildKeyboard()
+            return
+        }
+        if (apiKey.isBlank()) {
+            latestRewrite = createRewrite(source, mode)
+            latestTeaching = "Add your Claude API key in the ToneLayer Clarity app to use live rewrites. " + longMessageCheck(source)
+            buildKeyboard()
+            return
+        }
+
+        Thread {
+            val result = runCatching { callClaude(apiKey, source, mode) }
+            Handler(Looper.getMainLooper()).post {
+                result.onSuccess {
+                    latestRewrite = it.first
+                    latestTeaching = it.second + " " + longMessageCheck(source)
+                }.onFailure {
+                    latestRewrite = createRewrite(source, mode)
+                    latestTeaching = "Live rewrite failed, so this is a local fallback. ${it.localizedMessage ?: ""} " + longMessageCheck(source)
+                }
+                buildKeyboard()
+            }
+        }.start()
     }
 
     private fun useLatestRewrite() {
@@ -162,7 +203,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
 
     private fun createRewrite(text: String, mode: RewriteMode): String {
         return when (mode) {
-            RewriteMode.CLEAR -> "I want to say this clearly: $text"
+            RewriteMode.CLEAR -> "Clear version: $text"
             RewriteMode.SHORTER -> text.split(Regex("\\s+")).take(18).joinToString(" ").let { "Clear version: $it" }
             RewriteMode.WARMER -> "I want to say this warmly and clearly: $text"
             RewriteMode.DIRECT -> "Direct version: $text"
@@ -176,6 +217,64 @@ class NeuroBridgeKeyboardService : InputMethodService() {
             RewriteMode.WARMER -> "Softens tone while keeping the original meaning intact."
             RewriteMode.DIRECT -> "Makes the request easier to act on by reducing ambiguity."
         }
+    }
+
+    private fun longMessageCheck(text: String): String {
+        val words = text.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size
+        return if (text.length >= 700 || words >= 120) {
+            "This is getting long for a text. Are you okay? If this is turning into a novel, try Make Brief before sending."
+        } else ""
+    }
+
+    private fun callClaude(apiKey: String, text: String, mode: RewriteMode): Pair<String, String> {
+        val style = when (mode) {
+            RewriteMode.CLEAR -> "Clarify the message while preserving meaning."
+            RewriteMode.SHORTER -> "Make the message brief and easier to act on."
+            RewriteMode.WARMER -> "Soften the tone while preserving meaning."
+            RewriteMode.DIRECT -> "Make the message direct and clear without sounding harsh."
+        }
+        val system = """
+            You are ToneLayer Clarity, a communication assistant. Rewrite the user's message so it is clearer, easier to receive, and matched to the requested style. Do not shame the user. Preserve meaning. Return ONLY valid JSON with keys rewrite and teaching. Teaching should explain briefly why the change improves clarity.
+            Style: $style
+        """.trimIndent()
+
+        val body = JSONObject().apply {
+            put("model", "claude-haiku-4-5-20251001")
+            put("max_tokens", 2048)
+            put("system", system)
+            put("messages", JSONArray().put(JSONObject().apply {
+                put("role", "user")
+                put("content", "Message:\n$text\n\nReply with ONLY valid JSON.")
+            }))
+        }
+
+        val conn = (URL("https://api.anthropic.com/v1/messages").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 30000
+            readTimeout = 90000
+            doOutput = true
+            setRequestProperty("x-api-key", apiKey)
+            setRequestProperty("anthropic-version", "2023-06-01")
+            setRequestProperty("Content-Type", "application/json")
+        }
+        OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
+        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+        val response = stream.bufferedReader().use { it.readText() }
+        if (conn.responseCode !in 200..299) error("API failed ${conn.responseCode}: ${response.take(160)}")
+        val content = JSONObject(response).getJSONArray("content").getJSONObject(0).getString("text")
+        val cleaned = extractJson(content)
+        val parsed = JSONObject(cleaned)
+        return Pair(parsed.optString("rewrite", text), parsed.optString("teaching", "Fine-tuned for clarity."))
+    }
+
+    private fun extractJson(raw: String): String {
+        var s = raw.trim()
+        if (s.startsWith("```")) {
+            s = s.substringAfter('\n').removeSuffix("```").trim()
+        }
+        val start = s.indexOf('{')
+        val end = s.lastIndexOf('}')
+        return if (start >= 0 && end > start) s.substring(start, end + 1) else s
     }
 
     private fun addLetterRow(letters: String, sideInsetWeight: Float) {
