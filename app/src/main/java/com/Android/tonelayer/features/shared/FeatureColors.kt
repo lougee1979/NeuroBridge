@@ -22,14 +22,6 @@ val ToneLayerBlue = FeatureColors(
     outline = Color(0xFFA7F3D0)
 )
 
-val ClarityGreen = FeatureColors(
-    primary = Color(0xFF059669),
-    secondary = Color(0xFF6D4AC8),
-    surface = Color(0xFFECFDF5),
-    soft = Color(0xFFF4F0FF),
-    outline = Color(0xFFC4B5FD)
-)
-
 val NeutralGray = FeatureColors(
     primary = Color(0xFF52525B),
     secondary = Color(0xFF71717A),
