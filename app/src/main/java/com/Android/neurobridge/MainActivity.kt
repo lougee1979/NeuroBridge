@@ -38,7 +38,7 @@ enum class ClarityLens {
 }
 
 enum class RewriteStyle(val buttonLabel: String, val resultTitle: String) {
-    CLEAR("Rewrite", "Clearer rewrite"),
+    CLEAR("Clarify", "Clearer rewrite"),
     SHORTER("Shorter", "Shorter rewrite"),
     WARMER("Warmer", "Warmer rewrite"),
     DIRECT("Direct", "More direct rewrite"),
@@ -67,7 +67,7 @@ fun NeuroBridgeApp() {
                 .padding(16.dp)
         ) {
             Text(
-                text = "NeuroBridge Clarity",
+                text = "ToneLayer Clarity",
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold
             )

@@ -49,7 +49,7 @@ class NeuroBridgeKeyboardService : InputMethodService() {
 
     private fun addClarityToolbar() {
         val row = horizontalRow(heightDp = 36)
-        row.addView(toolbarKey("Rewrite", weight = 1.2f) { runRewrite(RewriteMode.CLEAR) })
+        row.addView(toolbarKey("Clarify", weight = 1.2f) { runRewrite(RewriteMode.CLEAR) })
         row.addView(toolbarKey("Shorter") { runRewrite(RewriteMode.SHORTER) })
         row.addView(toolbarKey("Warmer") { runRewrite(RewriteMode.WARMER) })
         row.addView(toolbarKey("Direct") { runRewrite(RewriteMode.DIRECT) })
